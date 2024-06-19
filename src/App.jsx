@@ -4,6 +4,7 @@ import Header from "./components/Header";
 import FileDisplay from "./components/FileDisplay";
 import Information from "./components/Information";
 import Transcribing from "./components/Transcribing";
+import { MessageTypes } from "./utils/presets";
 
 function App() {
   const [file, setFile] = useState(null);
@@ -22,64 +23,86 @@ function App() {
 
   const worker = useRef(null);
 
+  // Highlighted change: Initializing worker and setting up event listener
   useEffect(() => {
-    if (worker.current) {
+    if (!worker.current) {
       worker.current = new Worker(
         new URL("./utils/whisper.worker.js", import.meta.url, {
           type: "module",
         })
       );
+
+      const onMessageReceived = async (e) => {
+        switch (e.data.type) {
+          case "DOWNLOADING":
+            setDownloading(true);
+            console.log("DOWNLOADING");
+            break;
+          case "LOADING":
+            setLoading(true);
+            console.log("LOADING");
+            break;
+          case "RESULT":
+            setOutput(e.data.results);
+            break;
+          case "INTERFERENCE":
+            setFinished(true);
+            console.log("DONE");
+            break;
+          default:
+            break;
+        }
+      };
+
+      worker.current.addEventListener("message", onMessageReceived);
+
+      // Highlighted change: Ensuring the event listener is cleaned up
+      return () => {
+        if (worker.current) {
+          worker.current.removeEventListener("message", onMessageReceived);
+        }
+      };
     }
-
-    const onMessageRecived = async (e) => {
-      switch (e.data.type) {
-        case "DOWNLOADING":
-          setDownloading(true);
-          console.log("DOWNLOADING");
-          break;
-        case "LOADING":
-          setLoading(true);
-          console.log("LOADING");
-          break;
-        case "RESULT":
-          setOutput(e.data.results);
-          break;
-        case "INTERFERENCE":
-          setFinished(true);
-          console.log("DONE");
-          break;
-      }
-    };
-
-    worker.current.addEventListener('message', onMessageRecived)
-
-    return () => worker.current.removeEventListener ('message', onMessageRecived)
-  }, []);
+  }, []); // Highlighted change: Ensuring the effect runs only once
 
   useEffect(() => {
     console.log(audioStream);
   }, [audioStream]);
 
   async function readAudioFrom(file) {
-    const sampling_rate = 16000
-    const audioCTX = new AudioContext({sampleRate: sampling_rate})
-    const response = await file.arrayBuffer()
-    const decoded = await audioCTX.decodeAudioData(response)
-    const audio = decoded.getChannelData(0)
-    return audio
+    try {
+      const sampling_rate = 16000;
+      const audioCTX = new AudioContext({ sampleRate: sampling_rate });
+      const response = await file.arrayBuffer();
+      const decoded = await audioCTX.decodeAudioData(response);
+      const audio = decoded.getChannelData(0);
+      return audio;
+    } catch (error) {
+      console.error("Error reading audio file:", error);
+      return null;
+    }
   }
 
-  async function handleFormSubmission(){
-    if (!file && !audioStream) {return}
+  async function handleFormSubmission() {
+    if (!file && !audioStream) {
+      return;
+    }
 
-    let audio = await readAudioFrom(file ? file : audioStream)
-    const model_name = 'openai/whisper-tiny.en'
+    let audio = await readAudioFrom(file ? file : audioStream);
+    if (!audio) {
+      return;
+    }
 
-    worker.current.postMessage({
-      type: MessageType.INFERENCE_REQUEST,
-      audio,
-      model_name
-    })
+    const model_name = "openai/whisper-tiny.en";
+
+    // Highlighted change: Checking if worker exists before posting message
+    if (worker.current) {
+      worker.current.postMessage({
+        type: MessageTypes.INFERENCE_REQUEST,
+        audio,
+        model_name,
+      });
+    }
   }
 
   return (
@@ -94,7 +117,7 @@ function App() {
           <FileDisplay
             handleAudioReset={handleAudioReset}
             file={file}
-            audioStream={setAudioStream}
+            audioStream={audioStream} // Highlighted change: Using audioStream here
           />
         ) : (
           <Homepage setFile={setFile} setAudioStream={setAudioStream} />
