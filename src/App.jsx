@@ -1,11 +1,11 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import Homepage from "./components/Homepage";
 import Header from "./components/Header";
 import FileDisplay from "./components/FileDisplay";
 
 function App() {
-  const [file, setFile] = useState(null);
-  const [audioStream, setAudioStream] = useState(null);
+  const [file, setFile] = useState(null)
+  const [audioStream, setAudioStream] = useState(null)
 
   const isAudioAvailable = file || audioStream
 
