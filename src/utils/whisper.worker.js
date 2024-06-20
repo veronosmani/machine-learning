@@ -8,7 +8,12 @@ class MyTranscriptionPipeline {
 
     static async getInstance(progress_callback = null) {
         if (this.instance === null) {
-            this.instance = await pipeline(this.task, null, { progress_callback })
+            try {
+                this.instance = await pipeline(this.task, null, { progress_callback })
+            } catch (error) {
+                console.error("Error initializing pipeline:", error)
+                throw error
+            }
         }
 
         return this.instance
@@ -25,28 +30,36 @@ self.addEventListener('message', async (event) => {
 async function transcribe(audio) {
     sendLoadingMessage('loading')
 
-    let pipeline
+    let pipelineInstance
 
     try {
-        pipeline = await MyTranscriptionPipeline.getInstance(load_model_callback)
+        pipelineInstance = await MyTranscriptionPipeline.getInstance(load_model_callback)
     } catch (err) {
-        console.log(err.message)
+        console.error("Pipeline initialization failed:", err.message)
+        sendLoadingMessage('error')
+        return
     }
 
     sendLoadingMessage('success')
 
     const stride_length_s = 5
 
-    const generationTracker = new GenerationTracker(pipeline, stride_length_s)
-    await pipeline(audio, {
-        top_k: 0,
-        do_sample: false,
-        chunk_length: 30,
-        stride_length_s,
-        return_timestamps: true,
-        callback_function: generationTracker.callbackFunction.bind(generationTracker),
-        chunk_callback: generationTracker.chunkCallback.bind(generationTracker)
-    })
+    const generationTracker = new GenerationTracker(pipelineInstance, stride_length_s)
+    try {
+        await pipelineInstance(audio, {
+            top_k: 0,
+            do_sample: false,
+            chunk_length: 30,
+            stride_length_s,
+            return_timestamps: true,
+            callback_function: generationTracker.callbackFunction.bind(generationTracker),
+            chunk_callback: generationTracker.chunkCallback.bind(generationTracker)
+        })
+    } catch (err) {
+        console.error("Error during transcription:", err.message)
+        sendLoadingMessage('error')
+        return
+    }
     generationTracker.sendFinalResult()
 }
 
@@ -80,9 +93,18 @@ class GenerationTracker {
         this.pipeline = pipeline
         this.stride_length_s = stride_length_s
         this.chunks = []
-        this.time_precision = pipeline?.processor.feature_extractor.config.chunk_length / pipeline.model.config.max_source_positions
+        this.time_precision = this.getTimePrecision()
         this.processed_chunks = []
         this.callbackFunctionCounter = 0
+    }
+
+    getTimePrecision() {
+        if (this.pipeline?.processor?.feature_extractor?.config?.chunk_length && this.pipeline?.model?.config?.max_source_positions) {
+            return this.pipeline.processor.feature_extractor.config.chunk_length / this.pipeline.model.config.max_source_positions
+        } else {
+            console.error("Pipeline or its nested properties are not correctly initialized")
+            return null
+        }
     }
 
     sendFinalResult() {
@@ -111,29 +133,31 @@ class GenerationTracker {
 
     chunkCallback(data) {
         this.chunks.push(data)
-        const [text, { chunks }] = this.pipeline.tokenizer._decode_asr(
-            this.chunks,
-            {
-                time_precision: this.time_precision,
-                return_timestamps: true,
-                force_full_sequence: false
-            }
-        )
+        if (this.time_precision !== null) {
+            const [text, { chunks }] = this.pipeline.tokenizer._decode_asr(
+                this.chunks,
+                {
+                    time_precision: this.time_precision,
+                    return_timestamps: true,
+                    force_full_sequence: false
+                }
+            )
 
-        this.processed_chunks = chunks.map((chunk, index) => {
-            return this.processChunk(chunk, index)
-        })
+            this.processed_chunks = chunks.map((chunk, index) => {
+                return this.processChunk(chunk, index)
+            })
 
-
-        createResultMessage(
-            this.processed_chunks, false, this.getLastChunkTimestamp()
-        )
+            createResultMessage(
+                this.processed_chunks, false, this.getLastChunkTimestamp()
+            )
+        }
     }
 
     getLastChunkTimestamp() {
         if (this.processed_chunks.length === 0) {
             return 0
         }
+        return this.processed_chunks[this.processed_chunks.length - 1].end
     }
 
     processChunk(chunk, index) {
