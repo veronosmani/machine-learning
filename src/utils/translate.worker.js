@@ -1,4 +1,5 @@
-import { pipeline } from '@xenova/transformers';
+import { pipeline, env } from '@xenova/transformers';
+env.allowLocalModels = false;
 
 class MyTranslationPipeline {
     static task = 'translation';
@@ -7,7 +8,7 @@ class MyTranslationPipeline {
 
     static async getInstance(progress_callback = null) {
         if (this.instance === null) {
-            this.instance = pipeline(this.task, this.model, { progress_callback });
+            this.instance = await pipeline(this.task, this.model, { progress_callback });
         }
 
         return this.instance;
@@ -16,25 +17,26 @@ class MyTranslationPipeline {
 
 self.addEventListener('message', async (event) => {
     let translator = await MyTranslationPipeline.getInstance(x => {
-        self.postMessage(x)
-    })
-    console.log(event.data)
+        self.postMessage({ status: 'progress', progress: x });
+    });
+
+    console.log(event.data);
+
     let output = await translator(event.data.text, {
         tgt_lang: event.data.tgt_lang,
         src_lang: event.data.src_lang,
-
         callback_function: x => {
             self.postMessage({
                 status: 'update',
                 output: translator.tokenizer.decode(x[0].output_token_ids, { skip_special_tokens: true })
-            })
+            });
         }
-    })
+    });
 
-    console.log('HEHEHHERERE', output)
+    console.log('HEHEHHERERE', output);
 
     self.postMessage({
         status: 'complete',
-        output
-    })
-})
+        output: output[0].translation_text // Adjust this if the output format is different
+    });
+});
